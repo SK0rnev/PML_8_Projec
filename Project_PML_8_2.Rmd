@@ -1,0 +1,133 @@
+---
+title: "PML - Prediction Assigment"
+author: "SK"
+date: "23 October 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Housekeeping
+Preapre environment for analysis
+```{r, message=F, warning=F}
+library(caret)
+library(randomForest)
+set.seed(123)
+getwd()
+```
+
+## Read the data
+```{r, message=F, warning=F}
+data.in.training <- read.csv("pml-training.csv", na.strings = c("NA","","#DIV/0!"), stringsAsFactors = FALSE)
+data.in.testing <- read.csv("pml-testing.csv", na.strings = c("NA","","#DIV/0!"), stringsAsFactors = FALSE)
+```
+
+## Have a look at the data
+```{r, message=F, warning=F}
+dim(data.in.training)
+str(data.in.training)
+```
+
+## Remove aggregated data
+```{r, message=F, warning=F}
+data.in <- data.in.training[!(data.in.training$new_window=="yes"),]
+```
+## Remove variables with a lot of NAs
+```{r, message=F, warning=F}
+counts.NA <- sapply(data.in.training, function(x) sum(is.na(x)))
+to.remove <- (counts.NA/nrow(data.in.training))>0.2
+to.remove[1] <- TRUE # Remove ID
+data.in <- data.in.training[,!(to.remove)]
+```
+
+## Find arm - belt - dumbell - forearm variables
+```{r, message=F, warning=F}
+vars.all <- names(data.in)
+vars.all
+vars.arm <- vars.all[grepl("_arm", vars.all, fixed=TRUE)]
+vars.belt <- vars.all[grepl("_belt", vars.all, fixed=TRUE)]
+vars.dumbell <- vars.all[grepl("_dumbbell", vars.all, fixed=TRUE)]
+vars.forearm <- vars.all[grepl("_forearm", vars.all, fixed=TRUE)]
+```
+
+## Create a dataset for analysis with accelerometers data + name + target variable
+```{r, message=F, warning=F}
+data.in <- data.in[c(vars.arm,vars.belt,vars.dumbell,vars.forearm,"user_name","classe")]
+```
+
+## Convert string variables to factors
+## Find all string variables
+```{r, message=F, warning=F}
+is.string.var <- colnames(data.in)[sapply(data.in, is.character)]
+data.in[is.string.var] <- lapply(data.in[is.string.var], as.factor)
+data.in.testing$user_name <- as.factor(data.in.testing$user_name)
+str(data.in)
+```
+
+## Split the file to Train - Test (stratified - by default).
+## I want a least 1000 records for each class in the test set
+```{r, message=F, warning=F}
+table(data.in$classe)
+perc.train <-1-1000/min(table(data.in$classe))
+trainIndex = createDataPartition(data.in$classe, p = perc.train,list=FALSE)
+df.train = data.in[trainIndex,]
+df.test = data.in[-trainIndex,]
+table(df.test$classe)
+```
+
+## Run cross-validation. Calculate The Best Tune of number of variable randomly sampled.
+```{r, message=F, warning=F}
+fitControl = trainControl( method = "cv", number = 5)
+fit.RF.cv <- train(classe ~ ., data = df.train, method = "rf", trControl = fitControl)
+fit.RF.cv
+```
+## Average accuracy is 0.9911
+```{r, message=F, warning=F}
+confusionMatrix.train(fit.RF.cv)
+```
+
+## Build random forest model
+```{r, message=F, warning=F}
+fit.RF <- randomForest(classe~.,data=df.train,  mtry = fit.RF.cv$bestTune$mtry)
+fit.RF
+```
+
+## OOB estimate of  error rate is 0.68%. Check it on test data
+```{r, message=F, warning=F}
+confusionMatrix(predict(fit.RF,newdata=df.test), df.test$classe)$overall["Accuracy"]
+```
+## Results are close
+
+### Let's predict tesitn data for submission
+```{r, message=F, warning=F}
+ForSubmission = predict(fit.RF, newdata = data.in.testing)
+ForSubmission
+```
+
+## We got all 20 cases right!
+
+## Let's check LDA and gbm
+```{r, message=F, warning=F}
+fit.LDA <- train(classe ~ ., data = df.train, method = "lda")
+confusionMatrix(predict(fit.LDA,newdata=df.test), df.test$classe)$overall["Accuracy"]
+
+fit.gbm <- train(classe ~ ., data = df.train, method = "gbm", verbose=FALSE)
+confusionMatrix(predict(fit.gbm,newdata=df.test), df.test$classe)$overall["Accuracy"]
+```
+## RF outperforms LDA and GBM for this data set
+
+## As a conclusion
+According to Breiman and Cutler we don't need cross-validation for RF
+<https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr>
+
+In random forests, there is no need for cross-validation or a separate test set to get an unbiased estimate 
+of the test set error. It is estimated internally, during the run, as follows:
+Each tree is constructed using a different bootstrap sample from the original data. About one-third of the 
+cases are left out of the bootstrap sample and not used in the construction of the kth tree.
+Put each case left out in the construction of the kth tree down the kth tree to get a classification. 
+In this way, a test set classification is obtained for each case in about one-third of the trees. 
+At the end of the run, take j to be the class that got most of the votes every time case n was oob. 
+The proportion of times that j is not equal to the true class of n averaged over all cases is 
+the oob error estimate. This has proven to be unbiased in many tests.
